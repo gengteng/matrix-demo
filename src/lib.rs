@@ -1,5 +1,4 @@
 use std::ops::{Add, Mul};
-use std::slice::SplitMut;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
 pub struct Matrix<T, const R: usize, const C: usize> {
@@ -18,13 +17,6 @@ where
 }
 
 impl<T, const X: usize, const Y: usize> Matrix<T, X, Y> {
-    pub fn split_mut<F>(&mut self, pred: F) -> SplitMut<'_, [T; Y], F>
-    where
-        F: FnMut(&[T; Y]) -> bool,
-    {
-        self.data.split_mut(pred)
-    }
-
     pub fn dot_product<const Z: usize>(&self, matrix1: &Matrix<T, Y, Z>) -> Matrix<T, X, Z>
     where
         T: Default + Add<Output = T> + Mul<Output = T> + Copy,
