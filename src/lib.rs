@@ -1,8 +1,24 @@
-use std::ops::{Add, Mul};
+pub mod dynamic;
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
+use std::ops::{Add, Index, IndexMut, Mul};
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct Matrix<T, const R: usize, const C: usize> {
-    data: [[T; C]; R],
+    data: Box<[[T; C]; R]>,
+}
+
+impl<T, const R: usize, const C: usize> Index<usize> for Matrix<T, R, C> {
+    type Output = [T; C];
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.data[index]
+    }
+}
+
+impl<T, const R: usize, const C: usize> IndexMut<usize> for Matrix<T, R, C> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.data[index]
+    }
 }
 
 impl<T, const X: usize, const Y: usize> Default for Matrix<T, X, Y>
@@ -11,7 +27,7 @@ where
 {
     fn default() -> Self {
         Matrix {
-            data: [[T::default(); Y]; X],
+            data: Box::new([[T::default(); Y]; X]),
         }
     }
 }
@@ -37,25 +53,36 @@ impl<T, const X: usize, const Y: usize> Matrix<T, X, Y> {
     pub fn dot_product_in_parallel<const Z: usize>(
         &self,
         matrix1: &Matrix<T, Y, Z>,
+        parallel: usize,
     ) -> Matrix<T, X, Z>
     where
         T: Default + Add<Output = T> + Mul<Output = T> + Copy + Send + Sync,
     {
         let mut result = Matrix::<T, X, Z>::default();
+        let matrix0 = &self.data;
+        let matrix1_data = &matrix1.data;
 
         std::thread::scope(|scope| {
-            for (x, row) in result.data.iter_mut().enumerate() {
-                let matrix0_row = &self.data[x];
-                scope.spawn(move || {
-                    for (z, item1) in row.iter_mut().enumerate() {
-                        let mut sum = T::default();
-                        for (y, item0) in matrix0_row.iter().enumerate() {
-                            sum = sum + (*item0 * matrix1.data[y][z]);
+            let chunk_size = (X + parallel - 1) / parallel; // 计算每个线程应处理的行数
+            result
+                .data
+                .chunks_mut(chunk_size)
+                .enumerate()
+                .for_each(|(i, chunk)| {
+                    scope.spawn(move || {
+                        let start_index = i * chunk_size; // 计算全局行的起始索引
+                        for (local_index, row) in chunk.iter_mut().enumerate() {
+                            let global_index = start_index + local_index; // 计算全局行索引
+                            for z in 0..Z {
+                                let mut sum = T::default();
+                                for y in 0..Y {
+                                    sum = sum + matrix0[global_index][y] * matrix1_data[y][z];
+                                }
+                                row[z] = sum;
+                            }
                         }
-                        *item1 = sum;
-                    }
+                    });
                 });
-            }
         });
 
         result
@@ -64,7 +91,9 @@ impl<T, const X: usize, const Y: usize> Matrix<T, X, Y> {
 
 impl<T, const X: usize, const Y: usize> From<[[T; Y]; X]> for Matrix<T, X, Y> {
     fn from(data: [[T; Y]; X]) -> Self {
-        Self { data }
+        Self {
+            data: Box::new(data),
+        }
     }
 }
 
@@ -111,7 +140,7 @@ mod tests {
     fn test_dot_product_2x2_par() {
         let a = Matrix::from([[1, 2], [3, 4]]);
         let b = Matrix::from([[2, 0], [1, 2]]);
-        let result = a.dot_product_in_parallel(&b);
+        let result = a.dot_product_in_parallel(&b, num_cpus::get());
         let expected = Matrix::from([[4, 4], [10, 8]]);
         assert_eq!(result.data, expected.data);
     }
@@ -120,7 +149,7 @@ mod tests {
     fn test_dot_product_2x3_and_3x2_par() {
         let a = Matrix::from([[1, 2, 3], [4, 5, 6]]);
         let b = Matrix::from([[7, 8], [9, 10], [11, 12]]);
-        let result = a.dot_product_in_parallel(&b);
+        let result = a.dot_product_in_parallel(&b, num_cpus::get());
         let expected = Matrix::from([[58, 64], [139, 154]]);
         assert_eq!(result.data, expected.data);
     }
@@ -129,7 +158,7 @@ mod tests {
     fn test_dot_product_identity_matrix_par() {
         let a = Matrix::from([[1, 0], [0, 1]]);
         let b = Matrix::from([[5, 6], [7, 8]]);
-        let result = a.dot_product_in_parallel(&b);
+        let result = a.dot_product_in_parallel(&b, num_cpus::get());
         assert_eq!(result.data, b.data);
     }
 
@@ -137,7 +166,7 @@ mod tests {
     fn test_dot_product_with_zero_matrix_par() {
         let a = Matrix::from([[0, 0], [0, 0]]);
         let b = Matrix::from([[1, 2], [3, 4]]);
-        let result = a.dot_product_in_parallel(&b);
+        let result = a.dot_product_in_parallel(&b, num_cpus::get());
         let expected = Matrix::from([[0, 0], [0, 0]]);
         assert_eq!(result.data, expected.data);
     }
